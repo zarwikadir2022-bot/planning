@@ -23,7 +23,7 @@ def load_data():
 df = load_data()
 
 st.title("🏗️ Tableau de bord - Coulage des Dalles préfabriqués (Entreprise Gholoul)")
-st.markdown("Suivi en temps réel des types de poutres (DP1 à DP5), des étapes et de la main-d'œuvre.")
+st.markdown("Suivi en temps réel des types de dalles (DP1 à DP5), des étapes et de la main-d'œuvre.")
 
 # --- نظام تسجيل الدخول (Sidebar) ---
 st.sidebar.header("🔐 Connexion Administrateur")
