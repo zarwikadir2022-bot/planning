@@ -1,21 +1,19 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import os
+from streamlit_gsheets import GSheetsConnection
 
-# Configuration de la page (Mode Wide + Design Pro)
+# Configuration de la page
 st.set_page_config(
     page_title="Gestion du Pont - Gholoul",
     page_icon="🏗️",
     layout="wide"
 )
 
-# Application de styles CSS personnalisés pour un look professionnel (Construction & Engineering theme)
+# Style CSS professionnel
 st.markdown("""
     <style>
-    .main {
-        background-color: #f8f9fa;
-    }
+    .main { background-color: #f8f9fa; }
     .stMetric {
         background-color: #ffffff;
         padding: 15px;
@@ -23,32 +21,46 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         border-left: 5px solid #0056b3;
     }
-    .stSubheader {
-        color: #2c3e50;
-        font-weight: 700;
-    }
     </style>
 """, unsafe_allow_html=True)
 
-# Fichier de données local
-DATA_FILE = "gholoul_data.csv"
+# --- إعداد الاتصال بـ Google Sheets ---
+# سنقوم بقراءة البيانات مباشرة من الملف
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Fonction pour charger les données
 def load_data():
-    if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE)
+    try:
+        # قراءة الجدول (ttl=0 لضمان جلب التحديثات فوراً)
+        df = conn.read(ttl=0)
         expected_columns = ["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"]
         for col in expected_columns:
             if col not in df.columns:
                 df[col] = "N/A"
+        # تنظيف الصفوف الفارغة تماماً
+        df = df.dropna(how="all")
         return df
-    else:
-        df_default = pd.DataFrame(columns=["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"])
-        df_default.to_csv(DATA_FILE, index=False)
-        return df_default
+    except Exception as e:
+        st.error(f"Erreur de lecture Google Sheets: {e}")
+        return pd.DataFrame(columns=["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"])
 
-def save_data(df):
-    df.to_csv(DATA_FILE, index=False)
+def save_data_row(new_row_df):
+    try:
+        current_df = load_data()
+        updated_df = pd.concat([current_df, new_row_df], ignore_index=True)
+        conn.update(data=updated_df)
+        return True
+    except Exception as e:
+        st.error(f"Erreur lors de l'enregistrement: {e}")
+        return False
+
+def clear_all_data():
+    try:
+        empty_df = pd.DataFrame(columns=["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"])
+        conn.update(data=empty_df)
+        return True
+    except Exception as e:
+        st.error(f"Erreur lors de la réinitialisation: {e}")
+        return False
 
 df = load_data()
 
@@ -69,12 +81,12 @@ with st.sidebar:
         if st.button("Se connecter", use_container_width=True):
             if username == "gholoul_admin" and password == "12345":
                 st.session_state.authenticated = True
-                st.success("Connexion réussie !")
+                st.success("Connexion réussية !")
                 st.rerun()
             else:
                 st.error("Identifiants incorrects.")
     else:
-        st.success("👤 Administrateur Connecté")
+        st.success("👤 Administrateur (Google Sheets)")
         if st.button("Se déconnecter", use_container_width=True):
             st.session_state.authenticated = False
             st.rerun()
@@ -110,7 +122,7 @@ with st.sidebar:
             
             date_saisie = st.date_input("Date de l'opération")
             
-            submitted = st.form_submit_button("Enregistrer", use_container_width=True)
+            submitted = st.form_submit_button("Enregistrer sur Google Sheets", use_container_width=True)
             if submitted:
                 if poutre_id:
                     new_row = pd.DataFrame({
@@ -118,28 +130,27 @@ with st.sidebar:
                         "Type": [p_type],
                         "Etape": [etape],
                         "Specialite_Ouvriers": [specialite],
-                        "Effectif": [effectif],
+                        "Effectif": [int(effectif)],
                         "Statut": [statut],
                         "Date": [str(date_saisie)]
                     })
-                    df = pd.concat([df, new_row], ignore_index=True)
-                    save_data(df)
-                    st.success(f"Poutre {poutre_id} enregistrée !")
-                    st.rerun()
+                    if save_data_row(new_row):
+                        st.success(f"Poutre {poutre_id} enregistrée avec succès !")
+                        st.rerun()
                 else:
                     st.warning("Veuillez entrer l'ID de la poutre.")
 
 # --- Interface Principale ---
 st.title("🏗️ Tableau de Bord - Projet Pont Gholoul")
-st.markdown("Suivi centralisé des opérations, de la main-d'œuvre et de l'avancement par type de poutre.")
+st.markdown("Connecté en direct à Google Sheets - Suivi en temps réel.")
 st.markdown("---")
 
-if not df.empty:
-    # 1. Indicateurs Clés Globaux (KPIs)
+if not df.empty and "ID_Poutre" in df.columns and len(df.dropna(subset=["ID_Poutre"])) > 0:
+    # 1. KPIs
     col1, col2, col3, col4 = st.columns(4)
     
     total_poutres = df["ID_Poutre"].nunique()
-    total_workers = int(df["Effectif"].sum())
+    total_workers = int(df["Effectif"].sum()) if "Effectif" in df.columns else 0
     completed_works = len(df[df["Statut"].str.contains("Terminé", na=False)])
     ongoing_works = len(df[df["Statut"].str.contains("En Cours", na=False)])
     
@@ -150,7 +161,7 @@ if not df.empty:
     
     st.markdown("---")
     
-    # 2. Statistiques Globales et Graphiques Avancés
+    # 2. Charts
     st.subheader("📈 Analyses Globales du Chantier")
     col_chart1, col_chart2 = st.columns(2)
     
@@ -181,7 +192,7 @@ if not df.empty:
 
     st.markdown("---")
 
-    # 3. Sections Spécifiques par Type de Poutre (DP1 à DP5)
+    # 3. Tabs DP1 - DP5
     st.subheader("📑 Sections Détaillées par Type de Poutre (DP1 - DP5)")
     
     poutre_types = ["DP1", "DP2", "DP3", "DP4", "DP5"]
@@ -197,7 +208,6 @@ if not df.empty:
                 
                 st.dataframe(df_filtered, use_container_width=True)
                 
-                # Graphique individuel pour chaque type
                 fig_sub = px.bar(
                     df_filtered, 
                     x='ID_Poutre', 
@@ -208,21 +218,19 @@ if not df.empty:
                 )
                 st.plotly_chart(fig_sub, use_container_width=True)
             else:
-                st.info(f"Aucune donnée enregistrée pour le type {p_type} pour le moment.")
+                st.info(f"Aucune donnée enregistrée pour le type {p_type}.")
 
     st.markdown("---")
     
-    # 4. Registre Technique Global
-    st.subheader("📋 Registre Technique Général")
+    # 4. Table
+    st.subheader("📋 Registre Technique Général (Google Sheets)")
     st.dataframe(df, use_container_width=True)
     
-    # Bouton de réinitialisation
     if st.session_state.authenticated:
-        if st.button("🗑️ Réinitialiser toutes les données", type="secondary"):
-            if os.path.exists(DATA_FILE):
-                os.remove(DATA_FILE)
-            st.success("Données supprimées avec succès.")
-            st.rerun()
+        if st.button("🗑️ Vider le Google Sheet", type="secondary"):
+            if clear_all_data():
+                st.success("Google Sheet vidé avec succès.")
+                st.rerun()
 
 else:
-    st.info("📌 Aucune donnée enregistrée. Connectez-vous via la barre latérale pour commencer l'enregistrement.")
+    st.info("📌 Le Google Sheet est actuellement vide. Connectez-vous via la barre latérale pour ajouter le premier élément.")
