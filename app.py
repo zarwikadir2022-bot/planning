@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from streamlit_gsheets import GSheetsConnection
+import sqlite3
+import os
 
 # Configuration de la page
 st.set_page_config(
@@ -24,39 +25,75 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- إعداد الاتصال بـ Google Sheets ---
-# سنقوم بقراءة البيانات مباشرة من الملف
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- إعداد قاعدة بيانات SQLite المحلية ---
+DB_FILE = "gholoul.db"
 
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS poutres (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_poutre TEXT,
+            type TEXT,
+            etape TEXT,
+            specialite_ouvriers TEXT,
+            effectif INTEGER,
+            statut TEXT,
+            date TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# --- جلب البيانات من SQLite ---
 def load_data():
-    try:
-        # قراءة الجدول (ttl=0 لضمان جلب التحديثات فوراً)
-        df = conn.read(ttl=0)
-        expected_columns = ["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"]
-        for col in expected_columns:
-            if col not in df.columns:
-                df[col] = "N/A"
-        # تنظيف الصفوف الفارغة تماماً
-        df = df.dropna(how="all")
-        return df
-    except Exception as e:
-        st.error(f"Erreur de lecture Google Sheets: {e}")
-        return pd.DataFrame(columns=["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"])
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT * FROM poutres", conn)
+    conn.close()
+    
+    if not df.empty and "id" in df.columns:
+        # إزالة العمود التقني للآيدي الداخلي وإعادة تسمية الأعمدة لتتوافق مع الكود
+        df = df.drop(columns=["id"])
+        df = df.rename(columns={
+            "id_poutre": "ID_Poutre",
+            "type": "Type",
+            "etape": "Etape",
+            "specialite_ouvriers": "Specialite_Ouvriers",
+            "effectif": "Effectif",
+            "statut": "Statut",
+            "date": "Date"
+        })
+    else:
+        df = pd.DataFrame(columns=["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"])
+    return df
 
-def save_data_row(new_row_df):
+# --- حفظ صف جديد في SQLite ---
+def save_data_row(poutre_id, p_type, etape, specialite, effectif, statut, date_saisie):
     try:
-        current_df = load_data()
-        updated_df = pd.concat([current_df, new_row_df], ignore_index=True)
-        conn.update(data=updated_df)
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO poutres (id_poutre, type, etape, specialite_ouvriers, effectif, statut, date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (poutre_id, p_type, etape, specialite, int(effectif), statut, str(date_saisie)))
+        conn.commit()
+        conn.close()
         return True
     except Exception as e:
         st.error(f"Erreur lors de l'enregistrement: {e}")
         return False
 
+# --- مسح جميع البيانات ---
 def clear_all_data():
     try:
-        empty_df = pd.DataFrame(columns=["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"])
-        conn.update(data=empty_df)
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM poutres")
+        conn.commit()
+        conn.close()
         return True
     except Exception as e:
         st.error(f"Erreur lors de la réinitialisation: {e}")
@@ -81,12 +118,12 @@ with st.sidebar:
         if st.button("Se connecter", use_container_width=True):
             if username == "gholoul_admin" and password == "12345":
                 st.session_state.authenticated = True
-                st.success("Connexion réussية !")
+                st.success("Connexion réussie !")
                 st.rerun()
             else:
                 st.error("Identifiants incorrects.")
     else:
-        st.success("👤 Administrateur (Google Sheets)")
+        st.success("👤 Administrateur (SQLite Local)")
         if st.button("Se déconnecter", use_container_width=True):
             st.session_state.authenticated = False
             st.rerun()
@@ -122,19 +159,10 @@ with st.sidebar:
             
             date_saisie = st.date_input("Date de l'opération")
             
-            submitted = st.form_submit_button("Enregistrer sur Google Sheets", use_container_width=True)
+            submitted = st.form_submit_button("Enregistrer", use_container_width=True)
             if submitted:
                 if poutre_id:
-                    new_row = pd.DataFrame({
-                        "ID_Poutre": [poutre_id],
-                        "Type": [p_type],
-                        "Etape": [etape],
-                        "Specialite_Ouvriers": [specialite],
-                        "Effectif": [int(effectif)],
-                        "Statut": [statut],
-                        "Date": [str(date_saisie)]
-                    })
-                    if save_data_row(new_row):
+                    if save_data_row(poutre_id, p_type, etape, specialite, effectif, statut, date_saisie):
                         st.success(f"Poutre {poutre_id} enregistrée avec succès !")
                         st.rerun()
                 else:
@@ -142,7 +170,7 @@ with st.sidebar:
 
 # --- Interface Principale ---
 st.title("🏗️ Tableau de Bord - Projet Pont Gholoul")
-st.markdown("Connecté en direct à Google Sheets - Suivi en temps réel.")
+st.markdown("Base de données locale (SQLite) - Suivi des opérations en temps réel.")
 st.markdown("---")
 
 if not df.empty and "ID_Poutre" in df.columns and len(df.dropna(subset=["ID_Poutre"])) > 0:
@@ -223,14 +251,14 @@ if not df.empty and "ID_Poutre" in df.columns and len(df.dropna(subset=["ID_Pout
     st.markdown("---")
     
     # 4. Table
-    st.subheader("📋 Registre Technique Général (Google Sheets)")
+    st.subheader("📋 Registre Technique Général")
     st.dataframe(df, use_container_width=True)
     
     if st.session_state.authenticated:
-        if st.button("🗑️ Vider le Google Sheet", type="secondary"):
+        if st.button("🗑️ Vider la base de données", type="secondary"):
             if clear_all_data():
-                st.success("Google Sheet vidé avec succès.")
+                st.success("Base de données vidée avec succès.")
                 st.rerun()
 
 else:
-    st.info("📌 Le Google Sheet est actuellement vide. Connectez-vous via la barre latérale pour ajouter le premier élément.")
+    st.info("📌 La base de données est vide. Connectez-vous via la barre latérale pour ajouter le premier élément.")
