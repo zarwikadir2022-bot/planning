@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import sqlite3
-import os
 
 # Configuration de la page
 st.set_page_config(
@@ -25,38 +23,42 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- إعداد قاعدة بيانات SQLite المحلية ---
-DB_FILE = "gholoul.db"
+# --- إعداد الاتصال بقاعدة بيانات SQL السحابية ---
+# يتم ربط الاتصال تلقائياً عبر Streamlit SQL Connection
+try:
+    conn = st.connection("postgresql", type="sql")
+except Exception as e:
+    st.error(f"Erreur de configuration de la base de données: {e}")
 
+# إنشاء الجدول تلقائياً إذا لم يكن موجوداً
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS poutres (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_poutre TEXT,
-            type TEXT,
-            etape TEXT,
-            specialite_ouvriers TEXT,
-            effectif INTEGER,
-            statut TEXT,
-            date TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    with conn.session as s:
+        s.execute('''
+            CREATE TABLE IF NOT EXISTS poutres (
+                id SERIAL PRIMARY KEY,
+                id_poutre TEXT,
+                type TEXT,
+                etape TEXT,
+                specialite_ouvriers TEXT,
+                effectif INTEGER,
+                statut TEXT,
+                date TEXT
+            );
+        ''')
+        s.commit()
 
 init_db()
 
-# --- جلب البيانات من SQLite ---
+# --- جلب البيانات من SQL ---
 def load_data():
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM poutres", conn)
-    conn.close()
-    
-    if not df.empty and "id" in df.columns:
-        # إزالة العمود التقني للآيدي الداخلي وإعادة تسمية الأعمدة لتتوافق مع الكود
-        df = df.drop(columns=["id"])
+    try:
+        df = conn.query("SELECT * FROM poutres;", ttl=0)
+        if not df.empty and "id" in df.columns:
+            df = df.drop(columns=["id"])
+        else:
+            df = pd.DataFrame(columns=["id_poutre", "type", "etape", "specialite_ouvriers", "effectif", "statut", "date"])
+        
+        # توحيد أسماء الأعمدة لتتوافق مع العرض
         df = df.rename(columns={
             "id_poutre": "ID_Poutre",
             "type": "Type",
@@ -66,34 +68,42 @@ def load_data():
             "statut": "Statut",
             "date": "Date"
         })
-    else:
-        df = pd.DataFrame(columns=["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"])
-    return df
+        return df
+    except Exception as e:
+        st.error(f"Erreur lors du chargement des données SQL: {e}")
+        return pd.DataFrame(columns=["ID_Poutre", "Type", "Etape", "Specialite_Ouvriers", "Effectif", "Statut", "Date"])
 
-# --- حفظ صف جديد في SQLite ---
+# --- حفظ صف جديد في SQL ---
 def save_data_row(poutre_id, p_type, etape, specialite, effectif, statut, date_saisie):
     try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO poutres (id_poutre, type, etape, specialite_ouvriers, effectif, statut, date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (poutre_id, p_type, etape, specialite, int(effectif), statut, str(date_saisie)))
-        conn.commit()
-        conn.close()
+        with conn.session as s:
+            s.execute(
+                '''
+                INSERT INTO poutres (id_poutre, type, etape, specialite_ouvriers, effectif, statut, date)
+                VALUES (:poutre_id, :p_type, :etape, :specialite, :effectif, :statut, :date_saisie)
+                ''',
+                {
+                    "poutre_id": poutre_id,
+                    "p_type": p_type,
+                    "etape": etape,
+                    "specialite": specialite,
+                    "effectif": int(effectif),
+                    "statut": statut,
+                    "date_saisie": str(date_saisie)
+                }
+            )
+            s.commit()
         return True
     except Exception as e:
         st.error(f"Erreur lors de l'enregistrement: {e}")
         return False
 
-# --- مسح جميع البيانات ---
+# --- مسح الجدول بالكامل ---
 def clear_all_data():
     try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM poutres")
-        conn.commit()
-        conn.close()
+        with conn.session as s:
+            s.execute("DELETE FROM poutres;")
+            s.commit()
         return True
     except Exception as e:
         st.error(f"Erreur lors de la réinitialisation: {e}")
@@ -118,12 +128,12 @@ with st.sidebar:
         if st.button("Se connecter", use_container_width=True):
             if username == "gholoul_admin" and password == "12345":
                 st.session_state.authenticated = True
-                st.success("Connexion réussie !")
+                st.success("Connexion réussية !")
                 st.rerun()
             else:
                 st.error("Identifiants incorrects.")
     else:
-        st.success("👤 Administrateur (SQLite Local)")
+        st.success("👤 Administrateur (SQL Cloud)")
         if st.button("Se déconnecter", use_container_width=True):
             st.session_state.authenticated = False
             st.rerun()
@@ -159,7 +169,7 @@ with st.sidebar:
             
             date_saisie = st.date_input("Date de l'opération")
             
-            submitted = st.form_submit_button("Enregistrer", use_container_width=True)
+            submitted = st.form_submit_button("Enregistrer sur SQL", use_container_width=True)
             if submitted:
                 if poutre_id:
                     if save_data_row(poutre_id, p_type, etape, specialite, effectif, statut, date_saisie):
@@ -170,7 +180,7 @@ with st.sidebar:
 
 # --- Interface Principale ---
 st.title("🏗️ Tableau de Bord - Projet Pont Gholoul")
-st.markdown("Base de données locale (SQLite) - Suivi des opérations en temps réel.")
+st.markdown("Connecté à une base de données SQL Cloud - Suivi des opérations en temps réel.")
 st.markdown("---")
 
 if not df.empty and "ID_Poutre" in df.columns and len(df.dropna(subset=["ID_Poutre"])) > 0:
@@ -255,10 +265,11 @@ if not df.empty and "ID_Poutre" in df.columns and len(df.dropna(subset=["ID_Pout
     st.dataframe(df, use_container_width=True)
     
     if st.session_state.authenticated:
-        if st.button("🗑️ Vider la base de données", type="secondary"):
+        if st.button("🗑️ Vider la base de données SQL", type="secondary"):
             if clear_all_data():
                 st.success("Base de données vidée avec succès.")
                 st.rerun()
 
 else:
-    st.info("📌 La base de données est vide. Connectez-vous via la barre latérale pour ajouter le premier élément.")
+    st.info("📌 La base de données SQL est actuellement vide. Connectez-vous via la barre latérale pour ajouter le premier élément.")
+  
